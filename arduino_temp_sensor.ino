@@ -1,10 +1,12 @@
-#include <Ethernet.h>
 #include <ESP8266WiFi.h>
 
-#define VERSION "11.0"
+#define VERSION "12.6"
 #define CARBON_PORT 2003
-#define HTTPS_PORT 443
 #define POST_INTERVAL 5000
+
+// Reboot every 24 hours to clear any memory fragmentation or stuck states
+// 24 hours = 24 * 60 * 60 * 1000 = 86,400,000 milliseconds
+#define REBOOT_INTERVAL_MS 86400000UL
 
 #define VERSION_ArduinoOTA "1.1.0"
 #define VERSION_Adafruit_BME280 "2.2.4"
@@ -27,7 +29,6 @@ uint32_t next_post_timestamp = 0L;
 uint32_t wifi_connect_attempts = 0L;
 String carbon_host;
 String ota_password;
-String prefix;
 String sensor_name;
 
 void setSensorName () {
@@ -45,9 +46,10 @@ void setSensorName () {
     {0xd65878, "_outside"}
   };
   int id = ESP.getChipId();
+  const size_t num_sensors = sizeof(sensors) / sizeof(sensors[0]);
 
   sensor_name = "Error";
-  for (unsigned int i = 0; i < sizeof(sensors); i++) {
+  for (size_t i = 0; i < num_sensors; i++) {
     if (sensors[i].sensor_id == id) {
       sensor_name = sensors[i].sensor_name;
       break;
@@ -92,7 +94,17 @@ void setup() {
   setupFS();
   carbon_host = readFile("/carbon_host");
   ota_password = readFile("/ota_password");
-  sensor_name = readFile("/sensor_name");
+  
+  // Load sensor_name from SPIFFS, but keep chip ID name if SPIFFS is empty
+  String saved_sensor_name = readFile("/sensor_name");
+  if (saved_sensor_name.length() > 0) {
+    sensor_name = saved_sensor_name;
+    Serial.print(F("Using sensor_name from config: "));
+  } else {
+    // Keep the name set by setSensorName() based on chip ID
+    Serial.print(F("Using sensor_name from chip ID: "));
+  }
+  Serial.println(sensor_name);
   Serial.println();
 
   connectWiFi();
@@ -105,13 +117,24 @@ void setup() {
 }
 
 void loop() {
+  // Periodic reboot to clear memory fragmentation and any stuck states
+  // Check early to ensure reboot happens even if other handlers get stuck
+  if (millis() >= REBOOT_INTERVAL_MS) {
+    Serial.println(F("\n*** Scheduled daily reboot ***"));
+    Serial.print(F("Uptime was: "));
+    Serial.print(millis() / 1000 / 60 / 60);
+    Serial.println(F(" hours"));
+    delay(100);  // Allow serial to flush
+    ESP.restart();
+  }
+  
   handleWiFi();
   handleArduinoOTA();
   handleHTTPServer();
   if (millis() >= next_post_timestamp) {
     next_post_timestamp = millis() + POST_INTERVAL;
     if (sensor_name.length() == 0) {
-      Serial.print("Not sending metrics, setup needed: ");
+      Serial.print(F("Not sending metrics, setup needed: "));
       Serial.println(WiFi.localIP());
     } else {
       handleCarbon();
