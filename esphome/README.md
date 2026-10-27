@@ -1,7 +1,8 @@
 # ESPHome climate sensor firmware
 
 Current firmware source for office, bedroom, livingroom, outside and kid.
-The root Arduino sketches are retained as legacy source and recovery reference.
+ESPHome replaces the former Arduino firmware. Legacy source is available in
+Git history at commit bd532b4; it is no longer part of the current source tree.
 
 ## Source layout
 
