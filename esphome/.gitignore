@@ -1,0 +1,11 @@
+secrets.yaml
+.esphome/
+.private/
+__pycache__/
+*.bin
+*.elf
+*-test
+tests/*_runtime.inc
+tests/ota_receiver_methods.inc
+tests/prometheus_sensor_row.inc
+tests/ota_hash_input.tmp

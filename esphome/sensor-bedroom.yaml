@@ -1,0 +1,225 @@
+# Provisioned pilot; see DEPLOYMENT-STATUS.md for runtime/deployment status.
+# Hardware: arduino_temp_sensor 253d414f18c649fbbbb8f0c4bc91b6d5da6799c8.
+esphome:
+  name: sensor_bedroom
+  friendly_name: Bedroom Sensor
+  platformio_options:
+    board_build.ldscript: eagle.flash.4m1m.ld
+  on_boot:
+    priority: 800
+    then:
+      - lambda: |-
+          pinMode(0, OUTPUT);
+          pinMode(2, OUTPUT);
+          digitalWrite(0, HIGH);
+
+esp8266:
+  board: nodemcuv2
+  restore_from_flash: false
+
+logger:
+  baud_rate: 115200
+  level: INFO
+
+# Match the Docker host's existing time source. Logs may precede time sync.
+time:
+  - platform: sntp
+    id: syslog_clock
+    timezone: UTC
+    servers: [ntp.ubuntu.com]
+    update_interval: 6h
+
+udp:
+  id: syslog_udp
+  addresses: [10.0.0.2]
+
+syslog:
+  udp_id: syslog_udp
+  time_id: syslog_clock
+  port: 514
+  level: INFO
+  format: RFC5424
+  strip: true
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [wifi, bme280_base, bme280_i2c]
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  domain: .eyyit.com
+  use_address: sensor_bedroom.eyyit.com
+  fast_connect: false
+  post_connect_roaming: true
+  power_save_mode: NONE
+  on_connect:
+    then:
+      - logger.log:
+          level: INFO
+          format: "Climate monitor connected; event logging to 10.0.0.2:514/UDP"
+
+# Native password-protected OTA only; HTTP uploads remain disabled.
+ota:
+  - platform: esphome
+    password: !secret ota_password
+    on_begin:
+      then:
+        - lambda: esphome::wifi::global_wifi_component->office_set_ota_busy(true);
+    on_end:
+      then:
+        - lambda: esphome::wifi::global_wifi_component->office_set_ota_busy(false);
+    on_error:
+      then:
+        - lambda: esphome::wifi::global_wifi_component->office_set_ota_busy(false);
+
+web_server:
+  port: 80
+  version: 2
+  include_internal: false
+  ota: false
+  log: false
+  js_url: ""
+  css_url: ""
+  js_include: web/sensor-ui.mjs
+  css_include: web/sensor-ui.css
+
+prometheus:
+
+i2c:
+  sda: GPIO4
+  scl: GPIO5
+  frequency: 100kHz
+  scan: false
+
+# Preserve the existing daily restart workaround for this initial pilot.
+interval:
+  - interval: 24h
+    # ESPHome's first interval tick is within 0..5s, regardless of interval.
+    # Hold this automation until a full day has elapsed on every boot.
+    startup_delay: 24h
+    then:
+      - lambda: ESP.restart();
+
+sensor:
+  - platform: template
+    name: Sensor Sample Age
+    lambda: return id(environment_sensor).sample_age_seconds();
+    unit_of_measurement: s
+    accuracy_decimals: 2
+    update_interval: 1s
+  - platform: template
+    name: Sensor Sample Fresh
+    lambda: 'return id(environment_sensor).sample_fresh() ? 1.0f : 0.0f;'
+    accuracy_decimals: 2
+    update_interval: 1s
+  - platform: bme280_i2c
+    id: environment_sensor
+    address: 0x76
+    update_interval: 5s
+    iir_filter: 'OFF'
+    temperature:
+      name: Temperature Celsius
+      id: temperature_c
+      accuracy_decimals: 2
+      oversampling: 1x
+    pressure:
+      name: Pressure
+      id: pressure_hpa
+      accuracy_decimals: 2
+      oversampling: 1x
+    humidity:
+      name: Humidity
+      id: humidity_pct
+      accuracy_decimals: 2
+      oversampling: 1x
+      on_value:
+        then:
+          - lambda: |-
+              const float t = id(temperature_c).state;
+              const float p = id(pressure_hpa).state;
+              id(temperature_f).publish_state(t * 1.8f + 32.0f);
+              id(altitude_m).publish_state(44330.0f * (1.0f - powf(p / 1020.0f, 0.1903f)));
+              if (!std::isfinite(t) || !std::isfinite(x)) {
+                id(dewpoint_c).publish_state(NAN);
+                id(dewpoint_f).publish_state(NAN);
+                return;
+              }
+              const float rh = fminf(100.0f, fmaxf(0.1f, x));
+              const float alpha = 17.27f * t / (237.7f + t) + logf(rh / 100.0f);
+              const float dew = 237.7f * alpha / (17.27f - alpha);
+              id(dewpoint_c).publish_state(dew);
+              id(dewpoint_f).publish_state(dew * 1.8f + 32.0f);
+  - platform: template
+    name: Temperature Fahrenheit
+    id: temperature_f
+    unit_of_measurement: '°F'
+    accuracy_decimals: 2
+    update_interval: never
+  - platform: template
+    name: Altitude
+    id: altitude_m
+    unit_of_measurement: m
+    accuracy_decimals: 2
+    update_interval: never
+  - platform: template
+    name: Dew Point Celsius
+    id: dewpoint_c
+    unit_of_measurement: '°C'
+    accuracy_decimals: 2
+    update_interval: never
+  - platform: template
+    name: Dew Point Fahrenheit
+    id: dewpoint_f
+    unit_of_measurement: '°F'
+    accuracy_decimals: 2
+    update_interval: never
+  - platform: wifi_signal
+    name: WiFi Signal
+    accuracy_decimals: 2
+    update_interval: 5s
+  - platform: uptime
+    name: Uptime
+    accuracy_decimals: 2
+    update_interval: 5s
+  - platform: template
+    name: WiFi Roam Scans
+    lambda: return esphome::wifi::global_wifi_component->office_roam_scans();
+    accuracy_decimals: 2
+    update_interval: 5s
+  - platform: template
+    name: WiFi Roam Attempts
+    lambda: return esphome::wifi::global_wifi_component->office_roam_attempts();
+    accuracy_decimals: 2
+    update_interval: 5s
+  - platform: template
+    name: WiFi Roam Scan Errors
+    lambda: return esphome::wifi::global_wifi_component->office_roam_errors();
+    accuracy_decimals: 2
+    update_interval: 5s
+  - platform: template
+    name: WiFi Scan Recoveries
+    lambda: return esphome::wifi::global_wifi_component->office_scan_recoveries();
+    accuracy_decimals: 2
+    update_interval: 5s
+
+  - platform: template
+    name: Free Heap
+    lambda: return ESP.getFreeHeap();
+    unit_of_measurement: B
+    accuracy_decimals: 2
+    update_interval: 5s
+  - platform: template
+    name: Max Free Block Size
+    lambda: return ESP.getMaxFreeBlockSize();
+    unit_of_measurement: B
+    accuracy_decimals: 2
+    update_interval: 5s
+  - platform: template
+    name: Heap Fragmentation Percent
+    lambda: return ESP.getHeapFragmentation();
+    unit_of_measurement: '%'
+    accuracy_decimals: 2
+    update_interval: 5s

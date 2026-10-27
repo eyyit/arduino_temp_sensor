@@ -1,3 +1,14 @@
+# Temperature sensor firmware
+
+The current ESPHome firmware is in [esphome/](esphome/README.md), including
+all five device configurations, custom components, local web UI and fault tests.
+Fleet build/update automation and history migration remain separate.
+
+The Arduino files below are preserved as legacy firmware and recovery source.
+The legacy `compile.sh` builds those sketches, not the ESPHome firmware.
+
+---
+
 # Arduino Temp Sensor
 
 This project is a temperature, humidity, and pressure monitoring sensor utilizing an ESP8266 (NodeMCU) and a BME280 sensor.
